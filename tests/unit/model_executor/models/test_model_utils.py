@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the AFD plugin project
 """Draft model registration keeps native configuration aliases intact."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from tests.unit.fakes.async_ffn import load_host_module
@@ -54,3 +56,20 @@ def test_dspark_rejects_incompatible_remote_transport(
     setattr(draft, field, getattr(draft, field) + 1)
     with pytest.raises(ValueError, match=f"transport {field} mismatch"):
         configure_dspark(dspark_config)
+
+
+@pytest.mark.parametrize("device_type", ["npu", "cuda"])
+def test_v41_alias_is_local_to_npu_afd_config(monkeypatch, device_type):
+    module = load_host_module(
+        monkeypatch, "afd_plugin.model_executor.models.model_utils"
+    )
+    text = SimpleNamespace(architectures=["DeepseekV41ForCausalLM"])
+    original = SimpleNamespace(hf_config=text, hf_text_config=text)
+    if device_type == "cuda":
+        with pytest.raises(ValueError, match="NPU backend"):
+            module.get_afd_model_config(original, device_type=device_type)
+    else:
+        selected = module.get_afd_model_config(original, device_type=device_type)
+        assert selected.hf_config.architectures == ["AFDDeepseekV41ForCausalLM"]
+        assert selected.hf_config is selected.hf_text_config
+    assert original.hf_config.architectures == ["DeepseekV41ForCausalLM"]

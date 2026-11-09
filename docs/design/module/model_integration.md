@@ -62,6 +62,7 @@ make a backend-specific worker class the shared model API.
 | Role-aware model and weight loading | [`deepseek_v2.py`](../../../afd_plugin/model_executor/models/deepseek_v2.py) | [`test_forward_context.py`](../../../tests/unit/model_executor/models/test_forward_context.py), model and accuracy E2E suites |
 | DeepSeek V4 CUDA role boundary | [`deepseek_v4.py`](../../../afd_plugin/model_executor/models/deepseek_v4.py) | [`test_deepseek_v4_construction.py`](../../../tests/unit/model_executor/models/test_deepseek_v4_construction.py), [`test_deepseek_v4_proxy.py`](../../../tests/unit/model_executor/models/test_deepseek_v4_proxy.py), [`test_deepseek_v4_weight_policy.py`](../../../tests/unit/model_executor/models/test_deepseek_v4_weight_policy.py) |
 | DeepSeek V4 Ascend Hash-id boundary | [`npu/deepseek_v4.py`](../../../afd_plugin/model_executor/models/npu/deepseek_v4.py), [`npu/deepseek_v4_attention_gate.py`](../../../afd_plugin/model_executor/models/npu/deepseek_v4_attention_gate.py) | [`test_deepseek_v4_hash_ids.py`](../../../tests/unit/model_executor/test_deepseek_v4_hash_ids.py), [`test_deepseek_v4_npu_weight_roles.py`](../../../tests/unit/model_executor/test_deepseek_v4_npu_weight_roles.py), ids-mode cases in [`test_camp2p_token_ids.py`](../../../tests/unit/connectors/test_camp2p_token_ids.py) |
+| DeepSeek V4.1 Ascend framework adapter | [`npu/deepseek_v41.py`](../../../afd_plugin/model_executor/models/npu/deepseek_v41.py), [`npu/deepseek_v41_state.py`](../../../afd_plugin/model_executor/models/npu/deepseek_v41_state.py) | [`test_deepseek_v41.py`](../../../tests/unit/model_executor/models/npu/test_deepseek_v41.py), [`test_deepseek_v41_weights.py`](../../../tests/unit/model_executor/models/npu/test_deepseek_v41_weights.py), [`test_deepseek_v41_state.py`](../../../tests/unit/model_executor/models/npu/test_deepseek_v41_state.py); CPU contracts only, A5 operators and quantized FFN execution pending |
 | Qwen3 MoE role-aware model and weight loading | [`qwen3_moe.py`](../../../afd_plugin/model_executor/models/qwen3_moe.py) | [`test_qwen3_moe_construction.py`](../../../tests/unit/model_executor/models/test_qwen3_moe_construction.py), [`test_qwen3_moe_weight_policy.py`](../../../tests/unit/model_executor/models/test_qwen3_moe_weight_policy.py) |
 | CUDA remote-experts boundary | [`deepseek_v2.py`](../../../afd_plugin/model_executor/models/deepseek_v2.py), [`gpu/p2p.py`](../../../afd_plugin/connectors/gpu/p2p.py) | [`test_p2p_experts_contract.py`](../../../tests/unit/connectors/test_p2p_experts_contract.py), [`test_deepseek_v2_proxy.py`](../../../tests/unit/model_executor/models/test_deepseek_v2_proxy.py) |
 | Forward-context adapter | [`forward_context.py`](../../../afd_plugin/model_executor/models/forward_context.py) | [`test_forward_context.py`](../../../tests/unit/model_executor/models/test_forward_context.py) |
@@ -83,6 +84,7 @@ registers lazy AFD wrapper paths under `AFD`-prefixed aliases.
 | `DeepseekV3ForCausalLM` | `AFDDeepseekV3ForCausalLM` | `AFDDeepseekV3ForCausalLM` |
 | `DeepseekV32ForCausalLM` | `AFDDeepseekV32ForCausalLM` | `AFDDeepseekV3ForCausalLM` |
 | `DeepseekV4ForCausalLM` | `AFDDeepseekV4ForCausalLM` | `AFDDeepseekV4ForCausalLM` |
+| `DeepseekV41ForCausalLM` | `AFDDeepseekV41ForCausalLM` | `AFDDeepseekV41ForCausalLM` (NPU framework implementation) |
 | `DSparkDraftModel` | Unsupported | `AFDDSparkDeepseekV4ForCausalLM` (Async CAM: eager A, eager/FULL F) |
 | `GlmMoeDsaForCausalLM` | `AFDGlmMoeDsaForCausalLM` | `AFDGlmMoeDsaForCausalLM` |
 | `Qwen3MoeForCausalLM` | `AFDQwen3MoeForCausalLM` | `AFDQwen3MoeForCausalLM` |
@@ -91,6 +93,16 @@ registers lazy AFD wrapper paths under `AFD`-prefixed aliases.
 Only AFD workers switch their worker-local model configuration to the matching
 alias before constructing the AFD model runner. Non-AFD workers keep the
 checkpoint architecture and resolve to vLLM's native model class.
+
+The V4.1 NPU adapter targets vLLM-Ascend
+`f9c8e0bdb263d7a8c0270536f1ea00fa7373a84e`. Attention inherits its native
+decoder/model forward, including delayed HC (`pre_mix`), shared KV, Engram and
+bounded replay. It replaces routed MoE with the existing V4 Async CAM proxy;
+FFN constructs native routed experts and serves the connector's layer IDs.
+Replay plans are local to each asynchronous Attention DP. Engram uses the
+native shared host tables when its DP group has multiple ranks. See the
+[development recipe](../../../recipe/npu/CAMAsyncAFDConnector/deepseek_v41_flash/README.md)
+for the retained A3 operator path and the remaining A5/FP4 integration work.
 
 The DeepSeek, DeepSeek V2/V3/V3.2, and GLM aliases share the DeepSeek
 V2-derived implementation. DeepSeek V4, Qwen3 MoE, and Qwen3.5/3.6 each have a
