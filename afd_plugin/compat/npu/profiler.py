@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol
 
@@ -42,12 +43,44 @@ class AFDNPUProfilerConfig:
     skip_first: int
     trace_dir: str
     with_stack: bool
+    level: int
+    npu_only: bool
+    record_shapes: bool
+    start_at_s: float | None
+    duration_s: float
 
 
 class AFDNPUProfiler(Protocol):
     def step(self) -> None: ...
 
     def stop(self) -> None: ...
+
+
+class _TimedProfiler:
+    """Start/stop a torch-npu profiler on the wall clock instead of by steps."""
+
+    def __init__(self, profiler, start_at: float, duration: float):
+        self.profiler = profiler
+        self.start_at = start_at
+        self.duration = duration
+        self.started_at: float | None = None
+        self.finished = False
+
+    def step(self) -> None:
+        now = time.monotonic()
+        if self.started_at is None:
+            if now >= self.start_at:
+                self.profiler.start()
+                self.started_at = now
+            return
+        if not self.finished and now - self.started_at >= self.duration:
+            self.profiler.stop()
+            self.finished = True
+
+    def stop(self) -> None:
+        if self.started_at is not None and not self.finished:
+            self.profiler.stop()
+            self.finished = True
 
 
 def afd_npu_profiler_config(role: AFDNPUProfilerRole) -> AFDNPUProfilerConfig:
@@ -66,6 +99,16 @@ def afd_npu_profiler_config(role: AFDNPUProfilerRole) -> AFDNPUProfilerConfig:
         ),
         trace_dir=_env_dir(f"{prefix}_DIR", default=_DEFAULT_DIR[role]),
         with_stack=_env_bool(f"{prefix}_WITH_STACK", default=False),
+        # The task-time level still exports op and HCCL events; the higher
+        # levels add per-op metrics that dominate the perturbation.
+        level=_env_int(f"{prefix}_LEVEL", default=2),
+        npu_only=_env_bool(f"{prefix}_NPU_ONLY", default=False),
+        record_shapes=_env_bool(f"{prefix}_RECORD_SHAPES", default=True),
+        # Wall-clock trigger shared by both roles: Attention steps and FFN
+        # fused-MoE steps have very different durations, so step counts cannot
+        # align the two windows.
+        start_at_s=_env_float(f"{prefix}_START_AT_S", default=None),
+        duration_s=_env_float(f"{prefix}_DURATION_S", default=2.0),
     )
 
 
@@ -78,22 +121,52 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> AFDNPUProfiler | None:
 
     import torch_npu
 
+    levels = {
+        0: torch_npu.profiler.ProfilerLevel.Level0,
+        1: torch_npu.profiler.ProfilerLevel.Level1,
+        2: torch_npu.profiler.ProfilerLevel.Level2,
+    }
+    if config.level not in levels:
+        raise ValueError(
+            f"AFD NPU profiler level must be 0, 1 or 2, got {config.level}"
+        )
     experimental_config = torch_npu.profiler._ExperimentalConfig(
         export_type=torch_npu.profiler.ExportType.Text,
-        profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
+        profiler_level=levels[config.level],
         aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
     )
+    activities = [torch_npu.profiler.ProfilerActivity.NPU]
+    if not config.npu_only:
+        activities.insert(0, torch_npu.profiler.ProfilerActivity.CPU)
     logger.info(
-        "AFD NPU %s profiler enabled. Traces will be saved to: %s; with_stack=%s",
+        "AFD NPU %s profiler enabled. Traces will be saved to: %s; level=%d "
+        "npu_only=%s record_shapes=%s with_stack=%s",
         role,
         config.trace_dir,
+        config.level,
+        config.npu_only,
+        config.record_shapes,
         config.with_stack,
     )
+    if config.start_at_s is not None:
+        timed = torch_npu.profiler.profile(
+            activities=activities,
+            with_stack=config.with_stack,
+            with_modules=config.with_stack,
+            record_shapes=config.record_shapes,
+            experimental_config=experimental_config,
+            on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
+                config.trace_dir,
+            ),
+        )
+        return _TimedProfiler(
+            timed,
+            time.monotonic() + config.start_at_s,
+            config.duration_s,
+        )
+
     profiler = torch_npu.profiler.profile(
-        activities=[
-            torch_npu.profiler.ProfilerActivity.CPU,
-            torch_npu.profiler.ProfilerActivity.NPU,
-        ],
+        activities=activities,
         schedule=torch_npu.profiler.schedule(
             wait=config.wait,
             warmup=config.warmup,
@@ -103,7 +176,7 @@ def create_afd_npu_profiler(role: AFDNPUProfilerRole) -> AFDNPUProfiler | None:
         ),
         with_stack=config.with_stack,
         with_modules=config.with_stack,
-        record_shapes=True,
+        record_shapes=config.record_shapes,
         experimental_config=experimental_config,
         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
             config.trace_dir,
@@ -143,6 +216,16 @@ def _env_int(name: str, *, default: int) -> int:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
+
+def _env_float(name: str, *, default: float | None) -> float | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {value!r}") from exc
 
 
 def _env_dir(name: str, *, default: str) -> str:
