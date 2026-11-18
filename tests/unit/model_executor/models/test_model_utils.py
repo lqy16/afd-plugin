@@ -64,6 +64,7 @@ def model_utils(monkeypatch):
         ("DeepseekV2ForCausalLM", "cuda"),
         ("DeepseekV2ForCausalLM", "npu"),
         ("DeepseekV4ForCausalLM", "cuda"),
+        ("DeepseekV41ForCausalLM", "npu"),
         ("Qwen3MoeForCausalLM", "cuda"),
         ("Qwen3MoeForCausalLM", "npu"),
         ("Qwen3_5MoeForConditionalGeneration", "cuda"),
@@ -111,3 +112,12 @@ def test_model_config_rejects_qwen_on_npu_without_mutation(model_utils):
             SimpleNamespace(hf_config=hf_config), device_type="npu"
         )
     assert hf_config.architectures == ["Qwen3_5MoeForConditionalGeneration"]
+
+
+def test_model_config_rejects_v41_on_cuda_without_mutation(model_utils):
+    hf_config = SimpleNamespace(architectures=["DeepseekV41ForCausalLM"])
+    with pytest.raises(ValueError, match="NPU backend"):
+        model_utils.get_afd_model_config(
+            SimpleNamespace(hf_config=hf_config), device_type="cuda"
+        )
+    assert hf_config.architectures == ["DeepseekV41ForCausalLM"]
