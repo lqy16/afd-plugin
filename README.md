@@ -40,7 +40,9 @@ A5 DeepSeek V4 Flash support and bundled Mega setup are described in
 ## Support matrix
 
 See the [support matrix](docs/support.md) for models, connectors, tested
-configurations, and known accuracy/shutdown limits.
+configurations, and known accuracy/shutdown limits. The
+[DeepSeek V4.1 Flash A5 adapter](recipe/npu/CAMAsyncAFDConnector/deepseek_v41_flash/README.md)
+has CPU contract tests; A5 device validation is pending.
 
 ## Documentation
 

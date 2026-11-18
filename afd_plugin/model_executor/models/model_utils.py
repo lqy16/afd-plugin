@@ -32,6 +32,8 @@ def get_afd_model_config(
 
     for model_arch in model_config.hf_config.architectures:
         if model_arch in _MODEL_REGISTRATIONS:
+            if model_arch == "DeepseekV41ForCausalLM" and device_type != "npu":
+                raise ValueError("AFD DeepSeek V4.1 currently uses the NPU backend")
             if model_arch == "DSparkDraftModel" and device_type != "npu":
                 raise ValueError("AFD DSpark currently supports only the NPU backend")
             if model_arch in _QWEN3_5_MODEL_REGISTRATIONS and device_type != "cuda":
