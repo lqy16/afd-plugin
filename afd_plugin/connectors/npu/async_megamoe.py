@@ -24,7 +24,7 @@ from afd_plugin.distributed.afd_process_group import (
     DefaultProcessGroupSwitcher,
     init_afd_process_group,
 )
-from afd_plugin.envs import async_cam_layered_gmm_enabled
+from afd_plugin.envs import async_cam_layered_gmm_enabled, megamoe_publish_gate_mode
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
@@ -61,7 +61,7 @@ class MegaMoEStage:
 class _PublishedWords:
     """Read local PUBLISHED words without queuing behind an FFN compute stream."""
 
-    def __init__(self, buffer, attention_ranks: int, tp: int):
+    def __init__(self, buffer, attention_ranks: int, tp: int, mode: str = "on"):
         exception_bytes = dict(buffer.layout.sections)["exception"]
         window = buffer.manager.get_local_buffer_tensor(
             torch.int32, exception_bytes // 4
@@ -71,6 +71,7 @@ class _PublishedWords:
         self.host = torch.empty(self.rows.shape, dtype=torch.int32, pin_memory=True)
         self.stream = torch.npu.Stream(device=window.device)
         self.tp = tp
+        self.mode = mode
 
     def __call__(self) -> list[list[int]]:
         # Copy contiguous rows with DMA. Strided gathers would launch a device
@@ -78,7 +79,11 @@ class _PublishedWords:
         with torch.npu.stream(self.stream):
             self.host.copy_(self.rows, non_blocking=True)
         self.stream.synchronize()
-        return self.host[:, 0].reshape(-1, self.tp).tolist()
+        words = self.host[:, 0].reshape(-1, self.tp)
+        if self.mode == "leader":
+            # Diagnostics: only the mailbox owner has to reach the generation.
+            words = words[:, :1].repeat(1, self.tp)
+        return words.tolist()
 
 
 def validate_megamoe_config(config: VllmConfig, afd: AFDConfig) -> None:
@@ -288,6 +293,9 @@ class CAMAsyncMegamoeAFDConnector(AFDConnectorBase):
                 int(store.get(f"capacity/{dp}")) for dp in range(self.attn_size)
             )
             hf = self.vllm_config.model_config.hf_config
+            gate_mode = (
+                megamoe_publish_gate_mode() if dual_stage and not attention else "off"
+            )
             for stage in range(1 + dual_stage):
                 if stage:
                     # An independent HCCL domain isolates UMDK's payload AND its
@@ -323,8 +331,10 @@ class CAMAsyncMegamoeAFDConnector(AFDConnectorBase):
                         self.ffn_size,
                         ops.split_sequence,
                         read_published=(
-                            _PublishedWords(buffer, self.attn_size, self.attn_tp)
-                            if dual_stage and not attention
+                            _PublishedWords(
+                                buffer, self.attn_size, self.attn_tp, gate_mode
+                            )
+                            if gate_mode != "off"
                             else None
                         ),
                     ),
@@ -392,7 +402,8 @@ class CAMAsyncMegamoeAFDConnector(AFDConnectorBase):
         lane.ticket = None
         return output
 
-    def execute_next_experts(self) -> None:
+    def execute_next_experts(self) -> bool:
+        """Launch at most one fused-MoE task; report whether work was taken."""
         for offset in range(len(self.stages)):
             idx = (self.next_stage + offset) % len(self.stages)
             lane = self.stages[idx]
@@ -418,8 +429,9 @@ class CAMAsyncMegamoeAFDConnector(AFDConnectorBase):
                         lane.completion = torch.npu.Event()
                     lane.completion.record(lane.stream)
             self.next_stage = (idx + 1) % len(self.stages)
-            return
+            return True
         time.sleep(POLL_SECONDS)
+        return False
 
     def recv_attn_output(self, ubatch_idx=0, **kwargs):
         raise RuntimeError(

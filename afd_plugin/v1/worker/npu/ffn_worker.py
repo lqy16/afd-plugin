@@ -30,6 +30,11 @@ from afd_plugin.compat.npu import (
     npu_afd_num_ubatches,
 )
 from afd_plugin.compat.npu.ops import ensure_cam_async_ops_available
+from afd_plugin.compat.npu.profiler import (
+    create_afd_npu_profiler,
+    step_afd_npu_profiler,
+    stop_afd_npu_profiler,
+)
 from afd_plugin.config import AFD_ASYNC_CONNECTOR, parse_afd_config
 from afd_plugin.connectors import AFDConnectorFactory
 from afd_plugin.connectors.npu.async_cam import CAMAsyncAFDConnector
@@ -219,10 +224,21 @@ class AFDNPUFFNWorker(NPUWorker):
             self.model_runner.session.finish_receiver()
             return
 
+        # The eager MegaMoE connector drives work inside execute_next_experts,
+        # so the plugin profiler is stepped per launched fused-MoE task rather
+        # than per model-runner step.
+        mega_prof = create_afd_npu_profiler("ffn")
+        try:
+            self._run_eager_server_loop(event, mega_prof)
+        finally:
+            stop_afd_npu_profiler(mega_prof)
+
+    def _run_eager_server_loop(self, event, mega_prof) -> None:
         while not event.is_set():
             connector = self.model_runner.connector
             if isinstance(connector, CAMAsyncMegamoeAFDConnector):
-                connector.execute_next_experts()
+                if connector.execute_next_experts():
+                    step_afd_npu_profiler(mega_prof)
                 continue
             control_plane = connector.control_plane
             assert control_plane is not None
