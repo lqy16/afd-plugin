@@ -138,9 +138,14 @@ def _fail_if_unsupported_dsv4_async_features(
     from vllm_ascend.utils import AscendDeviceType, get_ascend_device_type
 
     if get_ascend_device_type() == AscendDeviceType.A5:
+        hf_config = vllm_config.model_config.hf_config
+        # vLLM's DeepseekV41Config lifts expert_dtype out of quantization_config
+        # and leaves it unset when the checkpoint omits it, so report the value
+        # actually read instead of surfacing an AttributeError.
+        expert_dtype = getattr(hf_config, "expert_dtype", None)
         if (
             extra_info.dynamic_quant != 0
-            or vllm_config.model_config.hf_config.expert_dtype != "fp4"
+            or expert_dtype != "fp4"
             or not vllm_config.model_config.enforce_eager
             or vllm_config.parallel_config.enable_eplb
             or async_cam_layered_gmm_enabled()
@@ -149,8 +154,10 @@ def _fail_if_unsupported_dsv4_async_features(
             or vllm_config.additional_config.get("enable_fused_mc2", 0)
         ):
             raise RuntimeError(
-                "A5 DSV4 Async CAM requires native FP4 experts, dynamicQuant=0, "
-                "eager execution, static EP, enable_fused_mc2=0 and layered GMM off"
+                "A5 DSV4 Async CAM requires native FP4 experts "
+                f"(hf_config.expert_dtype='fp4', got {expert_dtype!r}), "
+                "dynamicQuant=0, eager execution, static EP, "
+                "enable_fused_mc2=0 and layered GMM off"
             )
         return
     if extra_info.dynamic_quant != 1:

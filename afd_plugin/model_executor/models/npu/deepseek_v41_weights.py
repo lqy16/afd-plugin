@@ -35,6 +35,12 @@ def checkpoint_weight_roles(name: str) -> frozenset[str]:
         tail = parts[index + 3 :]
         if stage in ("ffn", "mlp"):
             if tail and tail[0] == "gate":
+                if tail[-1] == "bias_vl":
+                    # Vision-only router correction. Only the Attention gate
+                    # runs the router, and it owns this parameter when the
+                    # checkpoint carries vision layers; the CAM FFN consumes
+                    # already routed activations and never constructs it.
+                    return frozenset(("attention",))
                 # Native FFN MoE retains its gate parameters for loader/quant
                 # lifecycle, although CAM supplies already routed activations.
                 return _BOTH_ROLES

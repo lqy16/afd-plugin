@@ -22,7 +22,7 @@ from vllm.model_executor.layers import fused_moe
 from vllm.model_executor.layers.linear import ReplicatedLinear
 from vllm_ascend.models.deepseek_v41 import model as native
 
-from afd_plugin.config import AFD_ASYNC_CONNECTOR, parse_afd_config
+from afd_plugin.config import AFD_ASYNC_CONNECTOR, MEGAMOE_CONNECTOR, parse_afd_config
 from afd_plugin.connectors import AFDF2ATransferPayload
 from afd_plugin.model_executor.models.deepseek_v2 import RemoteFFNProxy
 from afd_plugin.model_executor.models.npu.deepseek_v4 import (
@@ -44,6 +44,13 @@ class AFDDeepseekV41AttentionGateRemoteMoE(AFDDeepseekV4AttentionGateRemoteMoE):
         self, *, config, layer_idx: int, prefix: str, vllm_config: VllmConfig
     ) -> None:
         RemoteFFNProxy.__init__(self, layer_idx=layer_idx)
+        # The V4 proxy selects the MegaMoE transfer path from this flag. This
+        # class bypasses V4's __init__, so resolve it here before the inherited
+        # forward reads it.
+        self.megamoe = (
+            parse_afd_config(vllm_config, validate=False).connector
+            == MEGAMOE_CONNECTOR
+        )
         self.use_sequence_parallel_moe = False
         self.top_k = config.num_experts_per_tok
         self.n_routed_experts = config.n_routed_experts
@@ -307,9 +314,13 @@ class AFDDeepseekV41ForCausalLM(native.AscendDeepseekV41LLMForCausalLM):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         afd = parse_afd_config(vllm_config, validate=False)
         parallel = vllm_config.parallel_config
-        if afd.connector != AFD_ASYNC_CONNECTOR or not afd.compute_gate_on_attention:
+        if (
+            afd.connector not in (AFD_ASYNC_CONNECTOR, MEGAMOE_CONNECTOR)
+            or not afd.compute_gate_on_attention
+        ):
             raise ValueError(
-                "DSV4.1 uses CAMAsyncAFDConnector with Attention-side routing"
+                "DSV4.1 uses CAMAsyncAFDConnector (or its MegaMoE variant) with "
+                "Attention-side routing"
             )
         if (
             parallel.tensor_parallel_size != 1

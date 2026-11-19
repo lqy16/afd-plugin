@@ -16,11 +16,7 @@ from vllm.v1.worker.worker_base import CompilationTimes
 from vllm.v1.worker.workspace import init_workspace_manager
 from vllm_ascend.ascend_config import get_ascend_config
 from vllm_ascend.cpu_binding import bind_cpus
-from vllm_ascend.utils import (
-    AscendDeviceType,
-    get_ascend_device_type,
-    register_ascend_fla_customop,
-)
+from vllm_ascend.utils import register_ascend_fla_customop
 from vllm_ascend.worker.worker import NPUWorker
 
 from afd_plugin.compat.npu import (
@@ -115,9 +111,10 @@ class AFDNPUFFNWorker(NPUWorker):
         self.device = self._init_device()
         # FLA registration needs the selected device, before Runner construction.
         register_ascend_fla_customop()
+        # The ordinary CAMAsync FFN path is not A3-only: A5 runs it on the
+        # plugin-owned afd_async_* operators. The layered GMM executor is the
+        # only A3-only execution model, and it rejects A5 where it is selected.
         if afd_config.connector == AFD_ASYNC_CONNECTOR:
-            if get_ascend_device_type() != AscendDeviceType.A3:
-                raise ValueError("layered GMM requires Ascend 910C/A3")
             ensure_cam_async_ops_available()
         init_workspace_manager(
             self.device,

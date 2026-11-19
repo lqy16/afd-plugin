@@ -34,6 +34,14 @@ if TYPE_CHECKING:
     from afd_plugin.connectors.npu.megamoe_layers import LayerWeights
 
 FLASH_GEOMETRY = (4096, 2048, 256, 6)
+# V4.1 Flash keeps native FP4 routed experts but widens hidden/intermediate and
+# grows the expert count. The UMDK split layout takes every width from config,
+# so only the accepted geometry set is connector-side knowledge.
+V41_FLASH_GEOMETRY = (5120, 2304, 384, 6)
+SUPPORTED_GEOMETRIES = {
+    "deepseek_v4": FLASH_GEOMETRY,
+    "deepseek_v41": V41_FLASH_GEOMETRY,
+}
 STARTUP_TIMEOUT = timedelta(minutes=30)
 
 
@@ -88,21 +96,23 @@ class _PublishedWords:
 
 def validate_megamoe_config(config: VllmConfig, afd: AFDConfig) -> None:
     hf = config.model_config.hf_config
+    geometry = (
+        hf.hidden_size,
+        hf.moe_intermediate_size,
+        hf.n_routed_experts,
+        hf.num_experts_per_tok,
+    )
+    expected_geometry = SUPPORTED_GEOMETRIES.get(hf.model_type)
     if (
         get_ascend_device_type() != AscendDeviceType.A5
-        or hf.model_type != "deepseek_v4"
-        or (
-            hf.hidden_size,
-            hf.moe_intermediate_size,
-            hf.n_routed_experts,
-            hf.num_experts_per_tok,
-        )
-        != FLASH_GEOMETRY
+        or expected_geometry is None
+        or geometry != expected_geometry
         or hf.expert_dtype != "fp4"
         or config.model_config.dtype != torch.bfloat16
     ):
         raise ValueError(
-            "MegaMoE requires A5 and native FP4 DeepSeek-V4-Flash with BF16 input"
+            "MegaMoE requires A5 and a native FP4 DeepSeek V4 Flash checkpoint "
+            f"with BF16 input (model_type={hf.model_type!r}, geometry={geometry})"
         )
     if config.additional_config.get("enable_fused_mc2", 0):
         raise ValueError(
