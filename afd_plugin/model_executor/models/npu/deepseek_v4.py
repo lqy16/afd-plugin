@@ -175,6 +175,17 @@ class AFDDeepseekV4RemoteMoE(RemoteFFNProxy):
         )
 
 
+def _in_profile_run() -> bool:
+    """Read the MRv2 profile marker at the NPU boundary, not at import time.
+
+    Same read as ``compat/npu/routing_ids.py``, kept local so importing that
+    module's custom-op registration stays off the V4.1 forward path.
+    """
+    from vllm_ascend.ascend_forward_context import _EXTRA_CTX
+
+    return _EXTRA_CTX.in_profile_run
+
+
 class AFDDeepseekV4AttentionGateRemoteMoE(RemoteFFNProxy):
     """DSV4 gate shell that routes local Attention tokens through Async CAM."""
 
@@ -251,17 +262,14 @@ class AFDDeepseekV4AttentionGateRemoteMoE(RemoteFFNProxy):
         hidden_states_fp32: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Select DSV4 experts on Attention and exchange routed work via CAM."""
-        from vllm.distributed.parallel_state import get_tp_group
-        from vllm_ascend.ascend_forward_context import _EXTRA_CTX
-
         from afd_plugin.model_executor.models.npu import deepseek_v4_attention_gate
 
-        tp = (
-            get_tp_group()
-            if self.mega and not self.use_sequence_parallel_moe
-            else None
-        )
-        if tp is not None and tp.world_size > 1 and not _EXTRA_CTX.in_profile_run:
+        tp = None
+        if self.mega and not self.use_sequence_parallel_moe:
+            from vllm.distributed.parallel_state import get_tp_group
+
+            tp = get_tp_group()
+        if tp is not None and tp.world_size > 1 and not _in_profile_run():
             layout = plain_tp_layout(
                 hidden_states.shape[0], tp.rank_in_group, tp.world_size
             )

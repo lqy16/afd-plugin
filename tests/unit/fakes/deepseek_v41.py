@@ -187,7 +187,7 @@ class CpuGpuBuffer:
 def config_for_role(role="attention", *, small=False, engram=False):
     config = npu_vllm_config(
         role=role,
-        connector="CAMAsyncAFDConnector",
+        connector="CAMAsyncMegaAFDConnector",
         async_dp=True,
         compute_gate_on_attention=True,
         num_attention_ranks=2,
@@ -376,7 +376,7 @@ def prepare_proxy_protocol(monkeypatch, contract):
     )
     stub("vllm.logger", init_logger=lambda name: __import__("logging").getLogger(name))
     layout = load_host_module(
-        monkeypatch, "afd_plugin.model_executor.models.npu.async_cam_layout"
+        monkeypatch, "afd_plugin.connectors.npu.async_cam_runtime.async_cam_layout"
     )
     gate = stub(
         "afd_plugin.model_executor.models.npu.deepseek_v4_attention_gate",

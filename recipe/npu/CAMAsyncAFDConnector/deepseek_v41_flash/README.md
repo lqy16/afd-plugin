@@ -1,5 +1,18 @@
 # DeepSeek-V4.1-Flash A5 framework development
 
+This branch runs DeepSeek V4.1 Flash on A5 with `CAMAsyncMegaAFDConnector`.
+Build the split operators with `AFD_BUILD_ASCEND_OPS=1 SOC_VERSION=950 python3 -m pip install --no-deps --no-build-isolation .`.
+Use the model, tokenizer and TP1/CP1 options below. Set `afd.async=true`,
+`compute_gate_on_attention=true`, `enable_fused_mc2=0`, and
+`connector_extra_config={"attn_ranks_per_dp":1}` on both roles.
+The FFN operator selects the ready DP and layer on device.
+See the [Mega runtime configuration](../../../../docs/npu/MEGA_EAGER.md).
+
+## Historical ordinary CAM prototype
+
+The remaining notes document the earlier ordinary CAM prototype. Its installation
+commands and connector settings apply only to that historical checkout.
+
 This adapter connects native DSV4.1 Attention to the existing DSV4 A3 Async CAM
 FFN path. It retains the A3 operators for the first framework implementation.
 The A5 Async CAM operator registrations and this checkpoint's MXFP4 FFN
