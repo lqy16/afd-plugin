@@ -365,6 +365,7 @@ def prepare_proxy_protocol(monkeypatch, contract):
         monkeypatch.setitem(sys.modules, name, module)
         return module
 
+    stub("vllm_ascend.ascend_forward_context", _EXTRA_CTX=SimpleNamespace(in_profile_run=False))
     stub("vllm.forward_context", DPMetadata=SimpleNamespace)
     metadata = load_host_module(monkeypatch, "afd_plugin.connectors.metadata")
     stub(
